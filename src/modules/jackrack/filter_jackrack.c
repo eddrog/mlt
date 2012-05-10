@@ -88,7 +88,7 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 		mlt_properties_set_int( properties, "_sync_guard", 0 );
 	}
 
-	return result;
+	return 1;//result;
 }
 
 static void on_jack_start( mlt_properties owner, mlt_properties properties )
@@ -111,8 +111,8 @@ static void on_jack_seek( mlt_properties owner, mlt_filter filter, mlt_position 
 
 
 	mlt_properties_set_int( properties, "_sync_guard", 1 );
-	mlt_properties_set_position( properties, "_jack_seek", *position );
-	return;
+//	mlt_properties_set_position( properties, "_jack_seek", *position );
+//	return;
 
 
 	mlt_profile profile = mlt_service_profile( MLT_FILTER_SERVICE( filter ) );
@@ -244,7 +244,9 @@ static int jack_process (jack_nframes_t frames, void * data)
 	int err = 0;
 	int i;
 	static int total_size = 0;
-  
+	static int init_buffer = 1;
+	static char * silence_buffer;
+
 	jack_ringbuffer_t **output_buffers = mlt_properties_get_data( properties, "output_buffers", NULL );
 	if ( output_buffers == NULL )
 		return 0;
@@ -255,6 +257,13 @@ static int jack_process (jack_nframes_t frames, void * data)
 	float **jack_input_buffers = mlt_properties_get_data( properties, "jack_input_buffers", NULL );
 	pthread_mutex_t *output_lock = mlt_properties_get_data( properties, "output_lock", NULL );
 	pthread_cond_t *output_ready = mlt_properties_get_data( properties, "output_ready", NULL );
+
+	if ( init_buffer == 1 )
+	{
+		silence_buffer = (char*) malloc(frames * sizeof(float));
+		memset(silence_buffer, 0, frames * sizeof(float));
+		init_buffer = 0;
+	}
 	
 	for ( i = 0; i < channels; i++ )
 	{
@@ -270,8 +279,14 @@ static int jack_process (jack_nframes_t frames, void * data)
 			break;
 		}
 		ring_size = jack_ringbuffer_read_space( output_buffers[i] );
-		jack_ringbuffer_read( output_buffers[i], ( char * )jack_output_buffers[i], ring_size < jack_size ? ring_size : jack_size );
-		
+		if ( ring_size == 0 )
+		{
+			memcpy(( char * )jack_output_buffers[i], silence_buffer, jack_size);
+		}
+		else
+		{
+			jack_ringbuffer_read( output_buffers[i], ( char * )jack_output_buffers[i], ring_size < jack_size ? ring_size : jack_size );
+		}
 		// Return audio through in port
 		jack_input_buffers[i] = jack_port_get_buffer( jack_input_ports[i], frames );
 		if ( ! jack_input_buffers[i] )
@@ -431,12 +446,29 @@ mlt_filter filter_jackrack_init( mlt_profile profile, mlt_service_type type, con
 	mlt_filter this = mlt_filter_new( );
 	if ( this != NULL )
 	{
-		char name[14];
-		
-		snprintf( name, sizeof( name ), "mlt%d", getpid() );
-		jack_client_t *jack_client = jack_client_open( name, JackNullOption, NULL );
+		char name[16];
+		char * jack_client_name;
+		jack_status_t status;
+
+		if(getenv("JACK_NAME_PRJ") != NULL) {
+			snprintf( name, sizeof( name ), "%s", getenv("JACK_NAME_PRJ"));
+		}
+		else if (getenv("JACK_NAME_CLIP") != NULL) {
+			snprintf( name, sizeof( name ), "%s", getenv("JACK_NAME_CLIP"));
+		}
+		else {
+			snprintf( name, sizeof( name ), "mlt%d", getpid() );
+		}
+
+		jack_client_t *jack_client = jack_client_open( name, JackNullOption, &status, NULL );
 		if ( jack_client )
 		{
+			if ( status & JackNameNotUnique ) 
+			{
+				jack_client_name = jack_get_client_name ( jack_client );
+				strcpy( name, jack_client_name );
+			}
+
 			mlt_properties properties = MLT_FILTER_PROPERTIES( this );
 			pthread_mutex_t *output_lock = mlt_pool_alloc( sizeof( pthread_mutex_t ) );
 			pthread_cond_t  *output_ready = mlt_pool_alloc( sizeof( pthread_cond_t ) );
