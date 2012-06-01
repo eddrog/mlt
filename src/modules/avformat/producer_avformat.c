@@ -114,7 +114,6 @@ struct producer_avformat_s
 	unsigned int invalid_pts_counter;
 	double resample_factor;
 	mlt_cache image_cache;
-	mlt_cache alpha_cache;
 	int colorspace;
 	pthread_mutex_t video_mutex;
 	pthread_mutex_t audio_mutex;
@@ -1085,6 +1084,8 @@ static int seek_video( producer_avformat self, mlt_position position,
 					timestamp += self->first_pts;
 				else if ( context->start_time != AV_NOPTS_VALUE )
 					timestamp += context->start_time;
+				if ( req_position <= 0 )
+					timestamp = 0;
 			}
 			else
 			{
@@ -1421,13 +1422,23 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 	if ( ! self->image_cache && ! mlt_properties_get_int( properties, "noimagecache" ) )
 	{
 		self->image_cache = mlt_cache_init();
-		self->alpha_cache = mlt_cache_init();
 	}
 	if ( self->image_cache )
 	{
 		mlt_frame original = mlt_cache_get_frame( self->image_cache, mlt_frame_get_position( frame ) );
 		if ( original )
 		{
+			mlt_properties orig_props = MLT_FRAME_PROPERTIES( original );
+			int size = 0;
+
+			*buffer = mlt_properties_get_data( orig_props, "alpha", &size );
+			if (*buffer)
+				mlt_frame_set_alpha( frame, *buffer, size, NULL );
+			*buffer = mlt_properties_get_data( orig_props, "image", &size );
+			mlt_frame_set_image( frame, *buffer, size, NULL );
+			mlt_properties_set_data( frame_properties, "avformat.image_cache", original, 0, (mlt_destructor) mlt_frame_close, NULL );
+			*format = mlt_properties_get_int( orig_props, "format" );
+
 			// Set the resolution
 			*width = codec_context->width;
 			*height = codec_context->height;
@@ -1436,15 +1447,7 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 			if ( *height == 1088 && mlt_profile_dar( mlt_service_profile( MLT_PRODUCER_SERVICE( producer ) ) ) == 16.0/9.0 )
 				*height = 1080;
 
-			int size = 0;
-			*buffer = mlt_properties_get_data( MLT_FRAME_PROPERTIES( original ), "alpha", &size );
-			if (*buffer)
-				mlt_frame_set_alpha( frame, *buffer, size, NULL );
-			*buffer = mlt_properties_get_data( MLT_FRAME_PROPERTIES( original ), "image", &size );
-			mlt_frame_set_image( frame, *buffer, size, NULL );
-			mlt_properties_set_data( frame_properties, "avformat.image_cache", original, 0, (mlt_destructor) mlt_frame_close, NULL );
 			got_picture = 1;
-
 			goto exit_get_image;
 		}
 	}
@@ -1480,7 +1483,13 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 	double delay = mlt_properties_get_double( properties, "video_delay" );
 
 	// Seek if necessary
-	int paused = seek_video( self, position, req_position, must_decode, use_new_seek, &ignore );
+	const char *interp = mlt_properties_get( frame_properties, "rescale.interp" );
+	int preseek = must_decode
+#if defined(FFUDIV) && LIBAVFORMAT_VERSION_INT >= ((53<<16)+(24<<8)+2)
+		&& ( !use_new_seek || ( interp && strcmp( interp, "nearest" ) ) )
+#endif
+		&& codec_context->has_b_frames;
+	int paused = seek_video( self, position, req_position, preseek, use_new_seek, &ignore );
 
 	// Seek might have reopened the file
 	context = self->video_format;
@@ -1495,9 +1504,7 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 
 	// Duplicate the last image if necessary
 	if ( self->av_frame && self->av_frame->linesize[0]
-		 && ( paused
-			  || self->current_position == req_position
-			  || ( !use_new_seek && self->current_position > req_position ) ) )
+		 && ( paused || self->current_position >= req_position ) )
 	{
 		// Duplicate it
 		if ( ( image_size = allocate_buffer( frame, codec_context, buffer, format, width, height ) ) )
@@ -1656,7 +1663,7 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 							pts -= self->first_pts;
 						else if ( context->start_time != AV_NOPTS_VALUE )
 							pts -= context->start_time;
-						int_position = ( int64_t )( av_q2d( stream->time_base) * pts * source_fps + 0.1 );
+						int_position = ( int64_t )( ( av_q2d( stream->time_base) * pts + delay ) * source_fps + 0.1 );
 						mlt_log_debug( MLT_PRODUCER_SERVICE(producer), "got frame %"PRId64", key %d\n", int_position, self->av_frame->key_frame );
 					}
 					// Handle ignore
@@ -1745,7 +1752,10 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 		mlt_frame_set_alpha( frame, alpha, (*width) * (*height), mlt_pool_release );
 
 	if ( image_size > 0 && self->image_cache )
+	{
+		mlt_properties_set_int( frame_properties, "format", *format );
 		mlt_cache_put_frame( self->image_cache, frame );
+	}
 
 	// Try to duplicate last image if there was a decoding failure
 	// TODO: with multithread decoding a partial frame decoding resulting
@@ -2732,8 +2742,6 @@ static void producer_avformat_close( producer_avformat self )
 #endif
 	if ( self->image_cache )
 		mlt_cache_close( self->image_cache );
-	if ( self->alpha_cache )
-		mlt_cache_close( self->alpha_cache );
 
 	// Cleanup the mutexes
 	pthread_mutex_destroy( &self->audio_mutex );
