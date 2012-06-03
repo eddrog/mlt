@@ -29,6 +29,8 @@
 
 
 extern mlt_consumer consumer_jack_init( mlt_profile profile, mlt_service_type type, const char *id, char *arg );
+extern mlt_filter filter_jackprobe_init( mlt_profile profile, mlt_service_type type, const char *id, char *arg );
+
 
 #ifdef GPL
 #include "plugin_mgr.h"
@@ -152,6 +154,7 @@ MLT_REPOSITORY
 	MLT_REGISTER_METADATA( filter_type, "jackrack", metadata, "filter_jackrack.yml" );
 	MLT_REGISTER( filter_type, "ladspa", filter_ladspa_init );
 	MLT_REGISTER_METADATA( filter_type, "ladspa", metadata, "filter_ladspa.yml" );
+	MLT_REGISTER( filter_type, "jackprobe", filter_jackprobe_init );
 #endif
 	MLT_REGISTER( consumer_type, "jack", consumer_jack_init );
 	MLT_REGISTER_METADATA( consumer_type, "jack", metadata, "consumer_jack.yml" );

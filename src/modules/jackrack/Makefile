@@ -15,6 +15,7 @@ GPL_OBJS = jack_rack.o \
 	plugin_settings.o \
 	process.o \
 	filter_jackrack.o \
+	filter_jackprobe.o \
 	filter_ladspa.o
 
 OBJS = factory.o \
