@@ -244,9 +244,7 @@ static int jack_process (jack_nframes_t frames, void * data)
 	int err = 0;
 	int i;
 	static int total_size = 0;
-	static int init_buffer = 1;
-	static char * silence_buffer;
-
+  
 	jack_ringbuffer_t **output_buffers = mlt_properties_get_data( properties, "output_buffers", NULL );
 	if ( output_buffers == NULL )
 		return 0;
@@ -257,13 +255,6 @@ static int jack_process (jack_nframes_t frames, void * data)
 	float **jack_input_buffers = mlt_properties_get_data( properties, "jack_input_buffers", NULL );
 	pthread_mutex_t *output_lock = mlt_properties_get_data( properties, "output_lock", NULL );
 	pthread_cond_t *output_ready = mlt_properties_get_data( properties, "output_ready", NULL );
-
-	if ( init_buffer == 1 )
-	{
-		silence_buffer = (char*) malloc(frames * sizeof(float));
-		memset(silence_buffer, 0, frames * sizeof(float));
-		init_buffer = 0;
-	}
 	
 	for ( i = 0; i < channels; i++ )
 	{
@@ -279,14 +270,10 @@ static int jack_process (jack_nframes_t frames, void * data)
 			break;
 		}
 		ring_size = jack_ringbuffer_read_space( output_buffers[i] );
-		if ( ring_size == 0 )
-		{
-			memcpy(( char * )jack_output_buffers[i], silence_buffer, jack_size);
-		}
-		else
-		{
-			jack_ringbuffer_read( output_buffers[i], ( char * )jack_output_buffers[i], ring_size < jack_size ? ring_size : jack_size );
-		}
+		jack_ringbuffer_read( output_buffers[i], ( char * )jack_output_buffers[i], ring_size < jack_size ? ring_size : jack_size );
+		if ( ring_size < jack_size )
+			memset( &jack_output_buffers[i][ring_size], 0, jack_size - ring_size );
+		
 		// Return audio through in port
 		jack_input_buffers[i] = jack_port_get_buffer( jack_input_ports[i], frames );
 		if ( ! jack_input_buffers[i] )
