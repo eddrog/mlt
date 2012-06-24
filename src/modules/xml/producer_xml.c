@@ -88,6 +88,7 @@ struct deserialise_context_s
 	mlt_consumer consumer;
 	int multi_consumer;
 	int consumer_count;
+	int seekable;
 };
 typedef struct deserialise_context_s *deserialise_context;
 
@@ -465,7 +466,7 @@ static void on_end_multitrack( deserialise_context context, const xmlChar *name 
 
 static void on_start_playlist( deserialise_context context, const xmlChar *name, const xmlChar **atts)
 {
-	mlt_playlist playlist = mlt_playlist_init( );
+	mlt_playlist playlist = mlt_playlist_new( context->profile );
 	mlt_service service = MLT_PLAYLIST_SERVICE( playlist );
 	mlt_properties properties = MLT_SERVICE_PROPERTIES( service );
 
@@ -584,6 +585,7 @@ static void on_end_producer( deserialise_context context, const xmlChar *name )
 		// Track this producer
 		track_service( context->destructors, producer, (mlt_destructor) mlt_producer_close );
 		mlt_properties_set_lcnumeric( MLT_SERVICE_PROPERTIES( producer ), context->lc_numeric );
+		context->seekable &= mlt_properties_get_int( MLT_SERVICE_PROPERTIES( producer ), "seekable" );
 
 		// Propagate the properties
 		qualify_property( context, properties, "resource" );
@@ -673,7 +675,6 @@ static void on_start_blank( deserialise_context context, const xmlChar *name, co
 	// Get the playlist from the stack
 	enum service_type type;
 	mlt_service service = context_pop_service( context, &type );
-	mlt_position length = 0;
 	
 	if ( type == mlt_playlist_type && service != NULL )
 	{
@@ -682,13 +683,11 @@ static void on_start_blank( deserialise_context context, const xmlChar *name, co
 		{
 			if ( xmlStrcmp( atts[0], _x("length") ) == 0 )
 			{
-				length = atoll( _s(atts[1]) );
+				// Append a blank to the playlist
+				mlt_playlist_blank_time( MLT_PLAYLIST( service ), _s(atts[1]) );
 				break;
 			}
 		}
-
-		// Append a blank to the playlist
-		mlt_playlist_blank( MLT_PLAYLIST( service ), length - 1 );
 
 		// Push the playlist back onto the stack
 		context_push_service( context, service, type );
@@ -1490,8 +1489,15 @@ static void parse_url( mlt_properties properties, char *url )
 			
 			case ':':
 			case '=':
-				url[ i++ ] = '\0';
-				value = &url[ i ];
+#ifdef WIN32
+				if ( url[i] == ':' && url[i + 1] != '/' )
+				{
+#endif
+					url[ i++ ] = '\0';
+					value = &url[ i ];
+#ifdef WIN32
+				}
+#endif
 				break;
 			
 			case '&':
@@ -1546,6 +1552,7 @@ mlt_producer producer_xml_init( mlt_profile profile, mlt_service_type servtype, 
 	context->destructors = mlt_properties_new();
 	context->params = mlt_properties_new();
 	context->profile = profile;
+	context->seekable = 1;
 
 	// Decode URL and parse parameters
 	mlt_properties_set( context->producer_map, "root", "" );
@@ -1722,7 +1729,7 @@ mlt_producer producer_xml_init( mlt_profile profile, mlt_service_type servtype, 
 		if ( getenv( "MLT_XML_DEEP" ) == NULL )
 		{
 			// Now assign additional properties
-			if ( info == 0 )
+			if ( info == 0 && !mlt_properties_get( properties, "resource" ) )
 				mlt_properties_set( properties, "resource", data );
 
 			// This tells consumer_xml not to deep copy
@@ -1739,6 +1746,8 @@ mlt_producer producer_xml_init( mlt_profile profile, mlt_service_type servtype, 
 		mlt_properties_inc_ref( MLT_CONSUMER_PROPERTIES( context->consumer ) );
 		mlt_properties_set_data( properties, "consumer", context->consumer, 0,
 			(mlt_destructor) mlt_consumer_close, NULL );
+
+		mlt_properties_set_int( properties, "seekable", context->seekable );
 	}
 	else
 	{
