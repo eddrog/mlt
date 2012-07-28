@@ -2255,7 +2255,7 @@ static int producer_get_audio( mlt_frame frame, void **buffer, mlt_audio_format 
 	}
 
 	// Initialize the resamplers and buffers
-	for ( ; index < index_max; index++ )
+	for ( ; index < index_max && index < MAX_AUDIO_STREAMS; index++ )
 	{
 		// Get codec context
 		AVCodecContext *codec_context = self->audio_codec[ index ];
@@ -2359,7 +2359,7 @@ static int producer_get_audio( mlt_frame frame, void **buffer, mlt_audio_format 
 
 			// We only deal with audio from the selected audio index
 			index = pkt.stream_index;
-			if ( ret >= 0 && pkt.data && pkt.size > 0 && ( index == self->audio_index ||
+			if ( index < MAX_AUDIO_STREAMS && ret >= 0 && pkt.data && pkt.size > 0 && ( index == self->audio_index ||
 				 ( self->audio_index == INT_MAX && context->streams[ index ]->codec->codec_type == CODEC_TYPE_AUDIO ) ) )
 			{
 				int channels2 = ( self->audio_index == INT_MAX || !self->audio_resample[index] ) ?
@@ -2589,7 +2589,7 @@ static void producer_set_up_audio( producer_avformat self, mlt_frame frame )
 	else if ( context && index > -1 && audio_codec_init( self, index, properties ) )
 	{
 		// Set the frame properties
-		if ( index < INT_MAX )
+		if ( index < MAX_AUDIO_STREAMS )
 		{
 			mlt_properties_set_int( frame_properties, "frequency", self->audio_codec[ index ]->sample_rate );
 			mlt_properties_set_int( frame_properties, "channels", self->audio_codec[ index ]->channels );
