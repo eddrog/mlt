@@ -51,6 +51,12 @@ static void jack_seek_transmitter( mlt_listener listener, mlt_properties owner, 
 	listener( owner, service, (mlt_position*) args[0] );
 }
 
+static void jack_sync_transmitter( mlt_listener listener, mlt_properties owner, mlt_service service, void **args )
+{
+	listener( owner, service, (mlt_position*) args[0] );
+}
+
+
 #define JACKSTATE(x) (x==JackTransportStopped?"stopped":x==JackTransportStarting?"starting":x==JackTransportRolling?"rolling":"unknown")
 
 static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, void *arg )
@@ -75,20 +81,25 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 		if ( !mlt_properties_get_int( properties, "_sync_guard" ) )
 		{
 			mlt_properties_set_int( properties, "_sync_guard", 1 );
-			mlt_events_fire( properties, "jack-started", &position, NULL );
+			mlt_events_fire( properties, "jack-sync", &position, NULL );
 		}
-		else if ( position >= mlt_properties_get_position( properties, "_last_pos" ) - 2 )
+		else if ( position >= 0 /* mlt_properties_get_position( properties, "_last_pos" ) - 2 */ )
 		{
 			mlt_properties_set_int( properties, "_sync_guard", 0 );
 			result = 1;
 		}
+	}
+	else if ( state == JackTransportRolling )
+	{
+		mlt_events_fire( properties, "jack-started", &position, NULL );
+		mlt_properties_set_int( properties, "_sync_guard", 0 );
 	}
 	else
 	{
 		mlt_properties_set_int( properties, "_sync_guard", 0 );
 	}
 
-	return 1;//result;
+	return result;
 }
 
 static void on_jack_start( mlt_properties owner, mlt_properties properties )
@@ -109,7 +120,7 @@ static void on_jack_seek( mlt_properties owner, mlt_filter filter, mlt_position 
 {
 	mlt_properties properties = MLT_FILTER_PROPERTIES( filter );
 	mlt_log_verbose( MLT_FILTER_SERVICE(filter), "%s: %d\n", __FUNCTION__, *position );
-	mlt_properties_set_int( properties, "_sync_guard", 1 );
+	//mlt_properties_set_int( properties, "_sync_guard", 1 );
 	mlt_profile profile = mlt_service_profile( MLT_FILTER_SERVICE( filter ) );
 	jack_client_t *jack_client = mlt_properties_get_data( properties, "jack_client", NULL );
 	jack_nframes_t jack_frame = jack_get_sample_rate( jack_client );
@@ -304,11 +315,20 @@ static int jack_process (jack_nframes_t frames, void * data)
 	jack_position_t jack_pos;
 	jack_transport_state_t state = jack_transport_query( jack_client, &jack_pos );
 	int transport_state = mlt_properties_get_int( properties, "_transport_state" );
+	mlt_profile profile = mlt_service_profile( MLT_FILTER_SERVICE(filter) );
+	mlt_position position = mlt_profile_fps( profile ) * jack_pos.frame / jack_pos.frame_rate + 0.5;
+
 	if ( state != transport_state )
 	{
 		mlt_properties_set_int( properties, "_transport_state", state );
 		if ( state == JackTransportStopped )
+		{
 			jack_sync( state, &jack_pos, filter );
+		}
+		else if ( (state == JackTransportRolling ) && ( transport_state == JackTransportStarting ) )
+		{
+			mlt_events_fire( properties, "jack-started", &position, NULL );
+		}
 	}
 
 	return err;
@@ -454,9 +474,11 @@ mlt_filter filter_jackrack_init( mlt_profile profile, mlt_service_type type, con
 
 			mlt_events_register( properties, "jack-started", (mlt_transmitter) jack_started_transmitter );
 			mlt_events_register( properties, "jack-stopped", (mlt_transmitter) jack_stopped_transmitter );
+
 			mlt_events_register( properties, "jack-start", NULL );
 			mlt_events_register( properties, "jack-stop", NULL );
 			mlt_events_register( properties, "jack-seek", (mlt_transmitter) jack_seek_transmitter );
+			mlt_events_register( properties, "jack-sync", (mlt_transmitter) jack_sync_transmitter );
 			mlt_events_listen( properties, properties, "jack-start", (mlt_listener) on_jack_start );
 			mlt_events_listen( properties, properties, "jack-stop", (mlt_listener) on_jack_stop );
 			mlt_events_listen( properties, this, "jack-seek", (mlt_listener) on_jack_seek );
