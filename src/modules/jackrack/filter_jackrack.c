@@ -88,7 +88,7 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 		mlt_properties_set_int( properties, "_sync_guard", 0 );
 	}
 
-	return 1;//result;
+	return result;
 }
 
 static void on_jack_start( mlt_properties owner, mlt_properties properties )
