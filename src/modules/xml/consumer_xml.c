@@ -236,7 +236,11 @@ static void serialise_properties( serialise_context context, mlt_properties prop
 		{
 			char *value;
 			if ( !strcmp( name, "length" ) )
-				value = strdup( mlt_properties_get_time( properties, name, context->time_format ) );
+			{
+				char *time = mlt_properties_get_time( properties, name, context->time_format );
+				if ( time )
+					value = strdup( time );
+			}
 			else
 				value = filter_restricted( mlt_properties_get_value( properties, i ) );
 			if ( value )
