@@ -242,9 +242,11 @@ static void mlt_consumer_property_changed( mlt_properties owner, mlt_consumer se
 	{
 		mlt_properties properties = MLT_CONSUMER_PROPERTIES( self );
 		mlt_profile profile = mlt_service_profile( MLT_CONSUMER_SERVICE( self ) );
-		profile->sample_aspect_den = mlt_properties_get_int( properties, "sample_aspect_den" );
 		if ( profile )
+		{
+			profile->sample_aspect_den = mlt_properties_get_int( properties, "sample_aspect_den" );
 			mlt_properties_set_double( properties, "aspect_ratio", mlt_profile_sar( profile )  );
+		}
 	}
 	else if ( !strcmp( name, "display_aspect_num" ) )
 	{
@@ -282,8 +284,8 @@ static void mlt_consumer_property_changed( mlt_properties owner, mlt_consumer se
  * \private \memberof mlt_consumer_s
  * \param listener a function pointer that will be invoked
  * \param owner the events object that will be passed to \p listener
- * \param self  a service that will be passed to \p listener
- * \param args an array of pointers - the first entry is passed as a string to \p listener
+ * \param self a service that will be passed to \p listener
+ * \param args an array of pointers - the first entry is passed as a frame to \p listener
  */
 
 static void mlt_consumer_frame_show( mlt_listener listener, mlt_properties owner, mlt_service self, void **args )
@@ -299,8 +301,8 @@ static void mlt_consumer_frame_show( mlt_listener listener, mlt_properties owner
  * \private \memberof mlt_consumer_s
  * \param listener a function pointer that will be invoked
  * \param owner the events object that will be passed to \p listener
- * \param self  a service that will be passed to \p listener
- * \param args an array of pointers - the first entry is passed as a string to \p listener
+ * \param self a service that will be passed to \p listener
+ * \param args an array of pointers - the first entry is passed as a frame to \p listener
  */
 
 static void mlt_consumer_frame_render( mlt_listener listener, mlt_properties owner, mlt_service self, void **args )
@@ -446,6 +448,9 @@ int mlt_consumer_start( mlt_consumer self )
 		// Allow the hash table to speed things up
 		mlt_properties_set_data( properties, "test_card_producer", NULL, 0, NULL, NULL );
 	}
+
+	// The profile could have changed between a stop and a restart.
+	apply_profile_properties( self, mlt_service_profile( MLT_CONSUMER_SERVICE(self) ), properties );
 
 	// Set the frame duration in microseconds for the frame-dropping heuristic
 	int frame_rate_num = mlt_properties_get_int( properties, "frame_rate_num" );
@@ -1185,7 +1190,7 @@ static void consumer_work_stop( mlt_consumer self )
 
 void mlt_consumer_purge( mlt_consumer self )
 {
-	if ( self->ahead )
+	if ( self && self->ahead )
 	{
 		pthread_mutex_lock( &self->queue_mutex );
 		while ( mlt_deque_count( self->queue ) )
@@ -1462,7 +1467,7 @@ int mlt_consumer_stop( mlt_consumer self )
 int mlt_consumer_is_stopped( mlt_consumer self )
 {
 	// Check if the consumer is stopped
-	if ( self->is_stopped != NULL )
+	if ( self && self->is_stopped )
 		return self->is_stopped( self );
 
 	return 0;
