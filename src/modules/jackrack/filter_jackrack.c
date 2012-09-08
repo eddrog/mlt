@@ -76,6 +76,7 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 		mlt_properties_get_position( properties, "_last_pos" ) );
 	if ( state == JackTransportStopped )
 	{
+		mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
 		mlt_events_fire( properties, "jack-stopped", &position, NULL );
 //		mlt_properties_set_int( properties, "_sync_guard", 0 );
 	}
@@ -83,11 +84,14 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 	{
 		result = 0;
 		sync_state = mlt_properties_get_int( properties, "_sync_state" );
+		int last_sync_state = mlt_properties_get_int( properties, "_last_sync_state" );
+		static int cc;
 
 		switch( sync_state )
 		{
 			case SYNC_STATE_REQ_SEEK:
 				mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_SEEKING );
+				mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_REQ_SEEK );
 				mlt_properties_set_position( properties, "_sync_req_pos", position );
 				mlt_events_fire( properties, "jack-sync", &position, NULL );
 				break;
@@ -95,13 +99,27 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 				if ( mlt_properties_get_position( properties, "_sync_req_pos" ) != position )
 				{
 					mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
+					mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_SEEKING );
 					break;
 				}
 				mlt_events_fire( properties, "jack-sync-pos", NULL);
-				if ( position == mlt_properties_get_position( properties, "_sync_pos" ) )
+				mlt_position sync_pos = mlt_properties_get_position( properties, "_sync_pos" );
+				if ( position == sync_pos )
 				{
 					result = 1;
 					mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
+					mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_SEEKING );
+					cc = 0;
+				}
+				else
+				{
+//					if ( cc > 30 )
+					{
+						cc = 0;
+						mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
+						mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_SEEKING );
+					}
+					cc++;
 				}
 				break;
 			default:
@@ -111,7 +129,8 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 	}
 	else if ( state == JackTransportRolling )
 	{
-		mlt_events_fire( properties, "jack-started", &position, NULL );
+		mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
+ 		mlt_events_fire( properties, "jack-started", &position, NULL );
 //		mlt_properties_set_int( properties, "_sync_guard", 0 );
 	}
 	else
@@ -346,7 +365,7 @@ static int jack_process (jack_nframes_t frames, void * data)
 			jack_sync( state, &jack_pos, filter );
 //			mlt_events_fire( properties, "jack-stopped", &position, NULL );
 		}
-		else if ( (state == JackTransportRolling ) && ( transport_state == JackTransportStarting ) )
+		else if ( (state == JackTransportRolling ) /* && ( transport_state == JackTransportStarting )*/ )
 		{
 //			if ( mlt_properties_get_int( properties, "_sync_guard" ) )
 			{
