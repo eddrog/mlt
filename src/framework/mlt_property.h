@@ -26,11 +26,12 @@
 
 #include "mlt_types.h"
 
-#ifdef HAVE_SYS_PARAM_H
+#if defined(__FreeBSD__)
+/* This header has existed since 1994 and defines __FreeBSD_version below. */
 #include <sys/param.h>
 #endif
 
-#if defined(__GLIBC__) || defined(__DARWIN__) || (__FreeBSD_version >= 1000002)
+#if defined(__GLIBC__) || defined(__DARWIN__) || (__FreeBSD_version >= 900506)
 #include <xlocale.h>
 #else
 typedef void* locale_t;

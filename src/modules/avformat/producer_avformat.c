@@ -91,6 +91,7 @@ struct producer_avformat_s
 	AVCodecContext *audio_codec[ MAX_AUDIO_STREAMS ];
 	AVCodecContext *video_codec;
 	AVFrame *av_frame;
+	AVPacket pkt;
 	ReSampleContext *audio_resample[ MAX_AUDIO_STREAMS ];
 	mlt_position audio_expected;
 	mlt_position video_expected;
@@ -1344,7 +1345,7 @@ static void convert_image( AVFrame *frame, uint8_t *buffer, int pix_fmt,
 		avpicture_fill( &output, buffer, PIX_FMT_RGB24, width, height );
 		img_convert( &output, PIX_FMT_RGB24, (AVPicture *)frame, pix_fmt, width, height );
 	}
-	else if ( format == mlt_image_rgb24a || format == mlt_image_opengl )
+	else if ( *format == mlt_image_rgb24a || *format == mlt_image_opengl )
 	{
 		AVPicture output;
 		avpicture_fill( &output, buffer, PIX_FMT_RGB32, width, height );
@@ -1393,7 +1394,7 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 	mlt_properties frame_properties = MLT_FRAME_PROPERTIES( frame );
 
 	// Obtain the frame number of this frame
-	mlt_position position = mlt_properties_get_position( frame_properties, "avformat_position" );
+	mlt_position position = mlt_frame_original_position( frame );
 
 	// Get the producer properties
 	mlt_properties properties = MLT_PRODUCER_PROPERTIES( producer );
@@ -1437,7 +1438,7 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 	}
 	if ( self->image_cache )
 	{
-		mlt_frame original = mlt_cache_get_frame( self->image_cache, mlt_frame_get_position( frame ) );
+		mlt_frame original = mlt_cache_get_frame( self->image_cache, position );
 		if ( original )
 		{
 			mlt_properties orig_props = MLT_FRAME_PROPERTIES( original );
@@ -1464,9 +1465,6 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 		}
 	}
 	// Cache miss
-
-	// Packet
-	AVPacket pkt;
 
 	// We may want to use the source fps if available
 	double source_fps = mlt_properties_get_double( properties, "meta.media.frame_rate_num" ) /
@@ -1542,8 +1540,6 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 		int64_t int_position = 0;
 		int decode_errors = 0;
 
-		av_init_packet( &pkt );
-
 		// Construct an AVFrame for YUV422 conversion
 		if ( !self->av_frame )
 			self->av_frame = avcodec_alloc_frame( );
@@ -1551,22 +1547,25 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 		while( ret >= 0 && !got_picture )
 		{
 			// Read a packet
+			if ( self->pkt.stream_index == self->video_index )
+				av_free_packet( &self->pkt );
+			av_init_packet( &self->pkt );
 			pthread_mutex_lock( &self->packets_mutex );
 			if ( mlt_deque_count( self->vpackets ) )
 			{
 				AVPacket *tmp = (AVPacket*) mlt_deque_pop_front( self->vpackets );
-				pkt = *tmp;
+				self->pkt = *tmp;
 				free( tmp );
 			}
 			else
 			{
-				ret = av_read_frame( context, &pkt );
-				if ( ret >= 0 && !self->seekable && pkt.stream_index == self->audio_index )
+				ret = av_read_frame( context, &self->pkt );
+				if ( ret >= 0 && !self->seekable && self->pkt.stream_index == self->audio_index )
 				{
-					if ( !av_dup_packet( &pkt ) )
+					if ( !av_dup_packet( &self->pkt ) )
 					{
 						AVPacket *tmp = malloc( sizeof(AVPacket) );
-						*tmp = pkt;
+						*tmp = self->pkt;
 						mlt_deque_push_back( self->apackets, tmp );
 					}
 				}
@@ -1574,9 +1573,9 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 			pthread_mutex_unlock( &self->packets_mutex );
 
 			// We only deal with video from the selected video_index
-			if ( ret >= 0 && pkt.stream_index == self->video_index && pkt.size > 0 )
+			if ( ret >= 0 && self->pkt.stream_index == self->video_index && self->pkt.size > 0 )
 			{
-				int64_t pts = best_pts( self, pkt.pts, pkt.dts );
+				int64_t pts = best_pts( self, self->pkt.pts, self->pkt.dts );
 				if ( pts != AV_NOPTS_VALUE )
 				{
 					if ( !self->seekable && self->first_pts == AV_NOPTS_VALUE )
@@ -1591,7 +1590,7 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 				}
 				mlt_log_debug( MLT_PRODUCER_SERVICE(producer),
 					"V pkt.pts %"PRId64" pkt.dts %"PRId64" req_pos %"PRId64" cur_pos %"PRId64" pkt_pos %"PRId64"\n",
-					pkt.pts, pkt.dts, req_position, self->current_position, int_position );
+					self->pkt.pts, self->pkt.dts, req_position, self->current_position, int_position );
 
 				// Make a dumb assumption on streams that contain wild timestamps
 				if ( abs( req_position - int_position ) > 999 )
@@ -1618,9 +1617,9 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 					if ( int_position >= req_position )
 						codec_context->skip_loop_filter = AVDISCARD_NONE;
 #if (LIBAVCODEC_VERSION_INT >= ((52<<16)+(26<<8)+0))
-					ret = avcodec_decode_video2( codec_context, self->av_frame, &got_picture, &pkt );
+					ret = avcodec_decode_video2( codec_context, self->av_frame, &got_picture, &self->pkt );
 #else
-					ret = avcodec_decode_video( codec_context, self->av_frame, &got_picture, pkt.data, pkt.size );
+					ret = avcodec_decode_video( codec_context, self->av_frame, &got_picture, self->pkt.data, self->pkt.size );
 #endif
 					// Note: decode may fail at the beginning of MPEGfile (B-frames referencing before first I-frame), so allow a few errors.
 					if ( ret < 0 )
@@ -1655,7 +1654,7 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 					else if ( int_position >= req_position )
 						codec_context->skip_loop_filter = AVDISCARD_NONE;
 				}
-				mlt_log_debug( MLT_PRODUCER_SERVICE(producer), " got_pic %d key %d\n", got_picture, pkt.flags & PKT_FLAG_KEY );
+				mlt_log_debug( MLT_PRODUCER_SERVICE(producer), " got_pic %d key %d\n", got_picture, self->pkt.flags & PKT_FLAG_KEY );
 			}
 
 			// Now handle the picture if we have one
@@ -1715,8 +1714,11 @@ static int producer_get_image( mlt_frame frame, uint8_t **buffer, mlt_image_form
 					got_picture = 0;
 				}
 			}
-			if ( self->seekable || pkt.stream_index != self->audio_index )
-				av_free_packet( &pkt );
+
+			// Free packet data if not video and not live audio packet
+			if ( self->pkt.stream_index != self->video_index &&
+				 !( !self->seekable && self->pkt.stream_index == self->audio_index ) )
+				av_free_packet( &self->pkt );
 		}
 	}
 
@@ -2240,7 +2242,7 @@ static int producer_get_audio( mlt_frame frame, void **buffer, mlt_audio_format 
 	pthread_mutex_lock( &self->audio_mutex );
 	
 	// Obtain the frame number of this frame
-	mlt_position position = mlt_properties_get_position( MLT_FRAME_PROPERTIES( frame ), "avformat_position" );
+	mlt_position position = mlt_frame_original_position( frame );
 
 	// Calculate the real time code
 	double real_timecode = producer_time_of_frame( self->parent, position );
@@ -2669,7 +2671,7 @@ static int producer_get_frame( mlt_producer producer, mlt_frame_ptr frame, int i
 
 	// Set the position of this producer
 	mlt_position position = self->seekable ? mlt_producer_frame( producer ) : self->nonseek_position++;
-	mlt_properties_set_position( MLT_FRAME_PROPERTIES( *frame ), "avformat_position", position );
+	mlt_properties_set_position( MLT_FRAME_PROPERTIES( *frame ), "original_position", position );
 
 	// Calculate the next timecode
 	mlt_producer_prepare_next( producer );
@@ -2682,6 +2684,7 @@ static void producer_avformat_close( producer_avformat self )
 	mlt_log_debug( NULL, "producer_avformat_close\n" );
 
 	// Cleanup av contexts
+	av_free_packet( &self->pkt );
 	av_free( self->av_frame );
 	pthread_mutex_lock( &self->open_mutex );
 	int i;
