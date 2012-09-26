@@ -41,6 +41,11 @@ static void jack_started_transmitter( mlt_listener listener, mlt_properties owne
 	listener( owner, service, (mlt_position*) args[0] );
 }
 
+static void jack_starting_transmitter( mlt_listener listener, mlt_properties owner, mlt_service service, void **args )
+{
+	listener( owner, service, (mlt_position*) args[0] );
+}
+
 static void jack_stopped_transmitter( mlt_listener listener, mlt_properties owner, mlt_service service, void **args )
 {
 	listener( owner, service, (mlt_position*) args[0] );
@@ -51,23 +56,17 @@ static void jack_seek_transmitter( mlt_listener listener, mlt_properties owner, 
 	listener( owner, service, (mlt_position*) args[0] );
 }
 
-static void jack_sync_transmitter( mlt_listener listener, mlt_properties owner, mlt_service service, void **args )
-{
-	listener( owner, service, (mlt_position*) args[0] );
-}
-
 
 #define JACKSTATE(x) (x==JackTransportStopped?"stopped":x==JackTransportStarting?"starting":x==JackTransportRolling?"rolling":"unknown")
 #define SYNC_STATE_REQ_SEEK    0
 #define SYNC_STATE_SEEKING     1
-#define SYNC_STATE_POS_REACHED 2
 
 static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, void *arg )
 {
 	mlt_filter filter = (mlt_filter) arg;
 	mlt_properties properties = MLT_FILTER_PROPERTIES( filter );
 	mlt_profile profile = mlt_service_profile( MLT_FILTER_SERVICE(filter) );
-	mlt_position position = mlt_profile_fps( profile ) * jack_pos->frame / jack_pos->frame_rate;// + 0.5;
+	mlt_position position = mlt_profile_fps( profile ) * jack_pos->frame / jack_pos->frame_rate + 0.5;
 	int sync_state = SYNC_STATE_REQ_SEEK;
 	int result = 1;
 
@@ -84,42 +83,36 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 	{
 		result = 0;
 		sync_state = mlt_properties_get_int( properties, "_sync_state" );
-		int last_sync_state = mlt_properties_get_int( properties, "_last_sync_state" );
-		static int cc;
+		int last_sync_state = mlt_properties_get_int( properties, "_last_sync_state" ); /* only for debug */
 
 		switch( sync_state )
 		{
 			case SYNC_STATE_REQ_SEEK:
 				mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_SEEKING );
 				mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_REQ_SEEK );
-				mlt_properties_set_position( properties, "_sync_req_pos", position );
-				mlt_events_fire( properties, "jack-sync", &position, NULL );
+				mlt_properties_set_position( properties, "_last_jack_position", position );
+				mlt_events_fire( properties, "jack-starting", &position, NULL );
 				break;
 			case SYNC_STATE_SEEKING:
-				if ( mlt_properties_get_position( properties, "_sync_req_pos" ) != position )
+				if ( mlt_properties_get_position( properties, "_last_jack_position" ) != position )
 				{
 					mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
 					mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_SEEKING );
 					break;
 				}
-				mlt_events_fire( properties, "jack-sync-pos", NULL);
-				mlt_position sync_pos = mlt_properties_get_position( properties, "_sync_pos" );
-				if ( position == sync_pos )
+
+				mlt_events_fire( properties, "jack-last-pos-req", NULL); /* don't know how to do it better ??? */
+				mlt_position last_pos = mlt_properties_get_position( properties, "_last_position" );
+				if ( position == last_pos )
 				{
 					result = 1;
 					mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
 					mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_SEEKING );
-					cc = 0;
 				}
 				else
 				{
-//					if ( cc > 30 )
-					{
-						cc = 0;
-						mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
-						mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_SEEKING );
-					}
-					cc++;
+					mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK ); /* sometimes the seek req must be done twice - why ? */
+					mlt_properties_set_int( properties, "_last_sync_state", SYNC_STATE_SEEKING );
 				}
 				break;
 			default:
@@ -130,7 +123,7 @@ static int jack_sync( jack_transport_state_t state, jack_position_t *jack_pos, v
 	else if ( state == JackTransportRolling )
 	{
 		mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
- 		mlt_events_fire( properties, "jack-started", &position, NULL );
+// 		mlt_events_fire( properties, "jack-started", &position, NULL );
 //		mlt_properties_set_int( properties, "_sync_guard", 0 );
 	}
 	else
@@ -355,7 +348,7 @@ static int jack_process (jack_nframes_t frames, void * data)
 	jack_position_t jack_pos;
 	jack_transport_state_t state = jack_transport_query( jack_client, &jack_pos );
 	int transport_state = mlt_properties_get_int( properties, "_transport_state" );
-	mlt_position position = mlt_profile_fps( profile ) * jack_pos.frame / jack_pos.frame_rate /* + 0.5 */;
+	mlt_position position = mlt_profile_fps( profile ) * jack_pos.frame / jack_pos.frame_rate + 0.5;
 
 	if ( state != transport_state )
 	{
@@ -534,12 +527,12 @@ mlt_filter filter_jackrack_init( mlt_profile profile, mlt_service_type type, con
 			mlt_properties_set_int( properties, "_sync_state", SYNC_STATE_REQ_SEEK );
 
 			mlt_events_register( properties, "jack-started", (mlt_transmitter) jack_started_transmitter );
+			mlt_events_register( properties, "jack-starting", (mlt_transmitter) jack_starting_transmitter );
 			mlt_events_register( properties, "jack-stopped", (mlt_transmitter) jack_stopped_transmitter );
 			mlt_events_register( properties, "jack-start", NULL );
 			mlt_events_register( properties, "jack-stop", NULL );
-			mlt_events_register( properties, "jack-sync-pos", NULL );
+			mlt_events_register( properties, "jack-last-pos-req", NULL );
 			mlt_events_register( properties, "jack-seek", (mlt_transmitter) jack_seek_transmitter );
-			mlt_events_register( properties, "jack-sync", (mlt_transmitter) jack_sync_transmitter );
 			mlt_events_listen( properties, properties, "jack-start", (mlt_listener) on_jack_start );
 			mlt_events_listen( properties, properties, "jack-stop", (mlt_listener) on_jack_stop );
 			mlt_events_listen( properties, this, "jack-seek", (mlt_listener) on_jack_seek );
