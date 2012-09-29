@@ -157,6 +157,7 @@ mlt_producer producer_pango_init( const char *filename )
 		mlt_properties_set_int( properties, "seekable", 1 );
 
 		if ( filename == NULL || ( filename && ( !strcmp( filename, "" )
+			|| strstr( filename, "<producer>" )
 			// workaround for old kdenlive countdown generator
 			|| strstr( filename, "&lt;producer&gt;" ) ) ) )
 		{
@@ -168,7 +169,8 @@ mlt_producer producer_pango_init( const char *filename )
 			char *markup = copy;
 			if ( strstr( markup, "/+" ) )
 				markup = strstr( markup, "/+" ) + 2;
-			( *strrchr( markup, '.' ) ) = '\0';
+			if ( strrchr( markup, '.' ) )
+				( *strrchr( markup, '.' ) ) = '\0';
 			while ( strchr( markup, '~' ) )
 				( *strchr( markup, '~' ) ) = '\n';
 			mlt_properties_set( properties, "resource", filename );
